@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Floating Lyrics</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a1a; min-height: 100vh; font-family: 'Helvetica Neue', Arial, sans-serif; overflow: hidden; }
+
+    #stage {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      background: linear-gradient(180deg, #0a0a1a 0%, #12122a 60%, #1a1a3a 100%);
+      overflow: hidden;
+      user-select: none;
+    }
+
+    .lyric-box {
+      position: absolute;
+      background: #ffffff;
+      color: #111111;
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+      font-weight: 400;
+      font-size: 16px;
+      line-height: 1.6;
+      padding: 80px 60px;
+      border-radius: 10px;
+      pointer-events: none;
+      white-space: pre-line;
+      max-width: 540px;
+      letter-spacing: -0.01em;
+      will-change: transform, opacity;
+      opacity: 0;
+    }
+
+    .star {
+      position: absolute;
+      background: white;
+      border-radius: 50%;
+      pointer-events: none;
+    }
+
+    #ui {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      background: rgba(255,255,255,0.07);
+      padding: 8px 18px;
+      border-radius: 10px;
+      backdrop-filter: blur(6px);
+      white-space: nowrap;
+    }
+
+    #ui button {
+      font-size: 13px;
+      padding: 5px 14px;
+      background: rgba(255,255,255,0.12);
+      color: white;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    #ui button:hover { background: rgba(255,255,255,0.22); }
+    #ui label { font-size: 13px; color: rgba(255,255,255,0.45); }
+    #ui input[type=range] { width: 80px; accent-color: #9f97ee; }
+    #ui span { font-size: 13px; color: rgba(255,255,255,0.7); min-width: 28px; }
+
+    #progress {
+      position: absolute;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 6px;
+    }
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      transition: background 0.3s;
+    }
+    .dot.active { background: rgba(255,255,255,0.85); }
+    .dot.done { background: rgba(255,255,255,0.4); }
+  </style>
+</head>
+<body>
+<div id="stage">
+  <div id="progress"></div>
+  <div id="ui">
+    <button onclick="restart()">↺ restart</button>
+    <label>speed</label>
+    <input type="range" id="speedSlider" min="0.4" max="2.5" step="0.1" value="1">
+    <span id="speedVal">1×</span>
+    <label style="margin-left:4px">read time</label>
+    <input type="range" id="readSlider" min="1000" max="5000" step="250" value="2500">
+    <span id="readVal">2.5s</span>
+  </div>
+</div>
+
+<script>
+const LYRICS = [
+  "One day, I will\nstop falling in love\nwith you",
+  "Some day, someone\nwill like me\nlike I like you",
+  "Until then,\nI'll drink my coffee,\neat my pie",
+  "Pretend that we\nare more than\nfriends",
+  "Then, of course,\nI'll let you\nbreak my heart again",
+];
+
+const POSITIONS = [
+  { xRatio: 0.15 },
+  { xRatio: 0.62 },
+  { xRatio: 0.35 },
+  { xRatio: 0.70 },
+  { xRatio: 0.20 },
+];
+
+const stage = document.getElementById('stage');
+const speedSlider = document.getElementById('speedSlider');
+const speedVal = document.getElementById('speedVal');
+const readSlider = document.getElementById('readSlider');
+const readVal = document.getElementById('readVal');
+const progressEl = document.getElementById('progress');
+
+let speed = 1;
+let readTime = 2500;
+let currentIndex = 0;
+let activeBoxes = [];
+let running = true;
+let sequenceTimer = null;
+let rafId = null;
+let lastTime = null;
+
+// Stars
+for (let i = 0; i < 90; i++) {
+  const s = document.createElement('div');
+  s.className = 'star';
+  s.style.left = Math.random() * 100 + '%';
+  s.style.top = Math.random() * 100 + '%';
+  const sz = Math.random() > 0.75 ? 3 : 2;
+  s.style.width = sz + 'px';
+  s.style.height = sz + 'px';
+  s.style.opacity = (Math.random() * 0.3 + 0.08).toFixed(2);
+  stage.appendChild(s);
+}
+
+// Progress dots
+function buildDots() {
+  progressEl.innerHTML = '';
+  LYRICS.forEach((_, i) => {
+    const d = document.createElement('div');
+    d.className = 'dot';
+    d.id = 'dot-' + i;
+    progressEl.appendChild(d);
+  });
+}
+
+function updateDots(idx) {
+  LYRICS.forEach((_, i) => {
+    const d = document.getElementById('dot-' + i);
+    if (!d) return;
+    d.className = 'dot' + (i === idx ? ' active' : i < idx ? ' done' : '');
+  });
+}
+
+function spawnBox(index) {
+  if (index >= LYRICS.length) {
+    // All done — loop after pause
+    sequenceTimer = setTimeout(() => restart(), 3000);
+    return;
+  }
+
+  updateDots(index);
+
+  const el = document.createElement('div');
+  el.className = 'lyric-box';
+  el.textContent = LYRICS[index];
+  stage.appendChild(el);
+
+  requestAnimationFrame(() => {
+    const stageW = stage.clientWidth;
+    const stageH = stage.clientHeight;
+    const boxW = el.offsetWidth;
+    const pos = POSITIONS[index % POSITIONS.length];
+
+    const x = Math.min(
+      Math.max(stageW * pos.xRatio, 8),
+      stageW - boxW - 8
+    );
+    const y = stageH * 0.72; // start from lower portion
+
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+
+    const box = {
+      el,
+      x,
+      y,
+      startY: y,
+      born: performance.now(),
+      phase: Math.random() * Math.PI * 2,
+      wobbleAmp: 0.6 + Math.random() * 0.8,
+      wobbleFreq: 0.5 + Math.random() * 0.5,
+      floatSpeed: 0.38 + Math.random() * 0.15, // slow, readable float
+      state: 'fadein', // fadein → hold → fadeout → done
+      stateAge: 0,
+    };
+
+    activeBoxes.push(box);
+
+    // Schedule next lyric after readTime
+    const delay = readTime / speed;
+    sequenceTimer = setTimeout(() => {
+      currentIndex++;
+      spawnBox(currentIndex);
+    }, delay);
+  });
+}
+
+function tick(ts) {
+  if (lastTime == null) lastTime = ts;
+  const dt = Math.min(ts - lastTime, 50);
+  lastTime = ts;
+
+  for (let i = activeBoxes.length - 1; i >= 0; i--) {
+    const b = activeBoxes[i];
+    const age = (ts - b.born) / 1000;
+
+    // Float upward slowly
+    b.y -= b.floatSpeed * speed * (dt / 16);
+    const wobble = Math.sin(age * b.wobbleFreq * Math.PI * 2 + b.phase) * b.wobbleAmp;
+
+    // Opacity: fade in over 0.4s, hold, fade out after readTime * 0.75
+    const fadeInDur = 0.4;
+    const totalLife = (readTime / speed / 1000) * 1.6; // linger a bit past next lyric
+    const fadeOutStart = totalLife - 0.6;
+
+    let opacity;
+    if (age < fadeInDur) {
+      opacity = age / fadeInDur;
+    } else if (age > fadeOutStart) {
+      opacity = Math.max(0, 1 - (age - fadeOutStart) / 0.6);
+    } else {
+      opacity = 1;
+    }
+
+    b.el.style.top = b.y + 'px';
+    b.el.style.left = b.x + 'px';
+    b.el.style.opacity = opacity;
+    b.el.style.transform = `translateX(${wobble}px)`;
+
+    if (opacity <= 0 && age > 1) {
+      b.el.remove();
+      activeBoxes.splice(i, 1);
+    }
+  }
+
+  rafId = requestAnimationFrame(tick);
+}
+
+function restart() {
+  if (sequenceTimer) clearTimeout(sequenceTimer);
+  activeBoxes.forEach(b => b.el.remove());
+  activeBoxes = [];
+  currentIndex = 0;
+  updateDots(-1);
+  spawnBox(0);
+}
+
+speedSlider.addEventListener('input', () => {
+  speed = parseFloat(speedSlider.value);
+  speedVal.textContent = speed.toFixed(1) + '×';
+});
+
+readSlider.addEventListener('input', () => {
+  readTime = parseInt(readSlider.value);
+  readVal.textContent = (readTime / 1000).toFixed(2).replace(/\.?0+$/, '') + 's';
+});
+
+buildDots();
+rafId = requestAnimationFrame(tick);
+spawnBox(0);
+</script>
+</body>
+</html>
